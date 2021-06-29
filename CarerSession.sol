@@ -1,60 +1,69 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity 0.8.1;
 
-import {
-    SafeERC20,
-    IERC20
-} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {SafeERC20, IERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
-import {
-    EnumerableSet
-} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 import {SafeMath} from "@openzeppelin/contracts/utils/math/SafeMath.sol";
 
 contract CarerSession is Ownable {
-    using EnumerableSet for EnumerableSet.UintSet;
+    using SafeMath for uint256;
 
     IERC20 public immutable GHST;
 
-    EnumerableSet.UintSet internal maxPets;
-    mapping(uint256 => uint256) public rateOfMaxPets;
+    uint256 public maxPets;
+    uint256 public baseRate;
+    uint256 public rateModifier;
+
+    mapping(address => uint256) public rateOfOwner;
 
     constructor(address _GHST) {
         GHST = IERC20(_GHST);
     }
 
-    function addMaxPets(uint256 _newMaxPets, uint256 _rateOfMaxPet)
-        external
-        onlyOwner
-    {
+    function setMaxPets(uint256 _newMaxPets) external onlyOwner {
+        maxPets = _newMaxPets;
+    }
+
+    function setBaseRate(uint256 _newBaseRate) external onlyOwner {
+        baseRate = _newBaseRate;
+    }
+
+    function setRateModifier(uint256 _newRateModifier) external onlyOwner {
+        rateModifier = _newRateModifier;
+    }
+
+    function sqrt(uint256 y) public pure returns (uint256 z) {
+        if (y > 3) {
+            z = y;
+            uint256 x = y / 2 + 1;
+            while (x < z) {
+                z = x;
+                x = (y / x + x) / 2;
+            }
+        } else if (y != 0) {
+            z = 1;
+        }
+    }
+
+    function calculateRate(uint256 gotchis) public view returns (uint256) {
         require(
-            !maxPets.contains(_newMaxPets),
-            "CarerSession: addMaxPets: Max pets already exists!"
+            gotchis != 0,
+            "Carer: calculateRate: Number of gotchis cannot be 0."
         );
+        uint256 extra = sqrt(rateModifier * 10**18 * gotchis);
+        uint256 _rate = baseRate.add(extra);
 
-        maxPets.add(_newMaxPets);
-        rateOfMaxPets[_newMaxPets] = _rateOfMaxPet;
+        return _rate;
     }
 
-    function removeMaxPets(uint256 _maxPets) external onlyOwner {
-        require(
-            maxPets.contains(_maxPets),
-            "CarerSession: addMaxPets: Max pets already exists!"
-        );
+    function determineAndSetRate(address _owner, uint256 _numOfIds) internal {
+        uint256 _rate = calculateRate(_numOfIds);
 
-        maxPets.remove(_maxPets);
-        delete rateOfMaxPets[_maxPets];
+        rateOfOwner[_owner] = _rate;
     }
 
-    function setRateOfMaxPet(uint256 _maxPet, uint256 _ratePerPet)
-        external
-        onlyOwner
-    {
-        rateOfMaxPets[_maxPet] = _ratePerPet;
-    }
-
-    function payWages(address _owner, uint256 _maxPets) internal {
-        uint256 _rate = rateOfMaxPets[_maxPets];
+    function payWages(address _owner) internal {
+        uint256 _rate = rateOfOwner[_owner];
 
         require(
             GHST.allowance(_owner, address(this)) >= _rate,
@@ -67,15 +76,5 @@ contract CarerSession is Ownable {
     function claimWages(uint256 _amt) external onlyOwner {
         address _owner = owner();
         SafeERC20.safeTransfer(GHST, _owner, _amt);
-    }
-
-    function getAllMaxPets()
-        external
-        view
-        returns (uint256[] memory allMaxPets)
-    {
-        uint256 length = maxPets.length();
-        allMaxPets = new uint256[](length);
-        for (uint256 i; i < length; i++) allMaxPets[i] = maxPets.at(i);
     }
 }
