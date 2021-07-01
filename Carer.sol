@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity 0.8.1;
 
-import {Monitored} from "./Monitored.sol";
 import {IAavegotchiFacet} from "./Aavegotchi/interfaces/IAavegotchiFacet.sol";
 import {IAavegotchiGameFacet} from "./Aavegotchi/interfaces/IAavegotchiGameFacet.sol";
 import {AavegotchiInfo} from "./Aavegotchi/libraries/LibAavegotchi.sol";
@@ -10,7 +9,7 @@ import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet
 import {ReentrancyGuard} from "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import {SafeMath} from "@openzeppelin/contracts/utils/math/SafeMath.sol";
 
-contract Carer is Monitored, CarerSession, ReentrancyGuard {
+contract Carer is CarerSession, ReentrancyGuard {
     using SafeMath for uint256;
     using EnumerableSet for EnumerableSet.AddressSet;
 
@@ -24,23 +23,22 @@ contract Carer is Monitored, CarerSession, ReentrancyGuard {
 
     mapping(address => uint256) public gotchisOfOwner;
     mapping(address => CareInfo) public careInfoByOwner;
-    mapping(address => uint256) public balances;
 
     address public immutable diamond;
+    address payable public immutable bot;
     IAavegotchiFacet public immutable facet;
     IAavegotchiGameFacet public immutable gameFacet;
 
     event LogTaskSubmitted(address indexed owner);
     event LogTaskDiscarded(address indexed owner);
-    event LogFundsDeposited(address indexed sender, uint256 amount);
-    event LogFundsWithdrawn(address indexed sender, uint256 amount);
 
     constructor(
         address _diamond,
         address payable _bot,
         address _GHST
-    ) Monitored(_bot) CarerSession(_GHST) {
+    ) CarerSession(_GHST) {
         diamond = _diamond;
+        bot = _bot;
         facet = IAavegotchiFacet(_diamond);
         gameFacet = IAavegotchiGameFacet(_diamond);
     }
@@ -88,29 +86,13 @@ contract Carer is Monitored, CarerSession, ReentrancyGuard {
         LogTaskDiscarded(_owner);
     }
 
-    function exec(CareInfo calldata _careInfo, uint256 _fee)
-        external
-        botOnly(_fee, MATIC)
-    {
+    function exec(CareInfo calldata _careInfo) external {
+        require(msg.sender == bot, "Monitored: Only bot");
+
         require(
             caringOwners.contains(_careInfo.owner),
             "Carer: exec: Owner has not started"
         );
-        require(
-            balances[_careInfo.owner] >= _fee,
-            "Carer: exec: Insufficient balance"
-        );
-
-        for (uint256 x = 0; x < _careInfo.gotchis.length; x++) {
-            uint256 _lastInteracted = facet
-            .getAavegotchi(_careInfo.gotchis[x])
-            .lastInteracted;
-
-            require(
-                block.timestamp.sub(_lastInteracted) >= 12 hours,
-                "Carer: exec: Time not elapsed"
-            );
-        }
 
         require(
             _careInfo.pets < maxPets,
@@ -118,8 +100,6 @@ contract Carer is Monitored, CarerSession, ReentrancyGuard {
         );
 
         gameFacet.interact(_careInfo.gotchis);
-
-        balances[_careInfo.owner] = balances[_careInfo.owner].sub(_fee);
 
         payWages(_careInfo.owner);
 
@@ -134,29 +114,6 @@ contract Carer is Monitored, CarerSession, ReentrancyGuard {
 
             careInfoByOwner[_careInfo.owner] = newCareInfo;
         }
-    }
-
-    function depositFunds() external payable {
-        require(msg.value >= 0.01 ether);
-        balances[msg.sender] = balances[msg.sender].add(msg.value);
-
-        emit LogFundsDeposited(msg.sender, msg.value);
-    }
-
-    function withdrawFunds() external nonReentrant {
-        require(
-            balances[msg.sender] > 0,
-            "Carer: withdrawFunds: Sender has no balance"
-        );
-
-        uint256 _amount = balances[msg.sender];
-
-        (bool success, ) = msg.sender.call{value: _amount}("");
-        require(success, "Carer: withdrawFunds: Withdraw funds failed");
-
-        balances[msg.sender] = 0;
-
-        emit LogFundsWithdrawn(msg.sender, _amount);
     }
 
     function getCaringOwners()
